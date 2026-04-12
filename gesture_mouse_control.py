@@ -1,29 +1,21 @@
 import cv2
-import mediapipe as mp
 import numpy as np
 from pynput.mouse import Controller, Button
 from pynput.keyboard import Key, Listener
 import threading
 import time
-
-# Configuration
-SCREEN_WIDTH = 1920
-SCREEN_HEIGHT = 1080
-SMOOTHING_FACTOR = 0.7  # Smooth mouse movement (0-1, higher = smoother)
-CLICK_THRESHOLD = 0.05  # Distance threshold for click detection
-GESTURE_DELAY = 0.2  # Delay between gesture actions
+import config
+from mediapipe_compat import HandTracker
+from gesture_utils import HandAnalyzer
 
 class GestureMouseController:
     def __init__(self):
-        # Initialize MediaPipe
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=1,
+        # Initialize MediaPipe hand tracking via Tasks API
+        self.hand_tracker = HandTracker(
+            num_hands=1,
             min_detection_confidence=0.7,
             min_tracking_confidence=0.5
         )
-        self.mp_drawing = mp.solutions.drawing_utils
         
         # Initialize mouse controller
         self.mouse = Controller()
@@ -114,27 +106,30 @@ class GestureMouseController:
         Control mouse based on hand position and gesture
         """
         current_time = time.time()
+
+        left_pinch = self.get_distance(
+            (landmarks[8].x, landmarks[8].y),
+            (landmarks[4].x, landmarks[4].y)
+        ) < config.CLICK_THRESHOLD
+        right_pinch = self.get_distance(
+            (landmarks[12].x, landmarks[12].y),
+            (landmarks[4].x, landmarks[4].y)
+        ) < config.CLICK_THRESHOLD
         
-        # Use index finger tip for cursor position in POINT mode
-        if gesture == "POINT":
-            cursor_landmark = landmarks[8]  # Index finger tip
-        else:
-            cursor_landmark = landmarks[9]  # Index finger PIP as default
-        
-        # Normalize coordinates to screen space
-        x = int(cursor_landmark.x * image_width)
-        y = int(cursor_landmark.y * image_height)
-        
-        # Invert X for natural movement (mirrored camera view)
-        x = image_width - x
-        
-        # Map to screen resolution
-        screen_x = int((x / image_width) * SCREEN_WIDTH)
-        screen_y = int((y / image_height) * SCREEN_HEIGHT)
+        palm_x, palm_y = HandAnalyzer.get_palm_center(landmarks)
+
+        # Scale palm position to provide more screen coverage without needing to leave the frame
+        scaled_x = 0.5 + ((palm_x - 0.5) * config.PALM_CONTROL_GAIN)
+        scaled_y = 0.5 + ((palm_y - 0.5) * config.PALM_CONTROL_GAIN)
+        scaled_x = max(0.0, min(1.0, scaled_x))
+        scaled_y = max(0.0, min(1.0, scaled_y))
+
+        screen_x = int(scaled_x * config.SCREEN_WIDTH)
+        screen_y = int(scaled_y * config.SCREEN_HEIGHT)
         
         # Smooth movement
-        smooth_x = int(self.prev_x * SMOOTHING_FACTOR + screen_x * (1 - SMOOTHING_FACTOR))
-        smooth_y = int(self.prev_y * SMOOTHING_FACTOR + screen_y * (1 - SMOOTHING_FACTOR))
+        smooth_x = int(self.prev_x * config.SMOOTHING_FACTOR + screen_x * (1 - config.SMOOTHING_FACTOR))
+        smooth_y = int(self.prev_y * config.SMOOTHING_FACTOR + screen_y * (1 - config.SMOOTHING_FACTOR))
         
         self.prev_x = smooth_x
         self.prev_y = smooth_y
@@ -143,24 +138,13 @@ class GestureMouseController:
         self.mouse.position = (smooth_x, smooth_y)
         
         # Handle clicks based on gesture
-        if current_time - self.last_gesture_time > GESTURE_DELAY:
-            if gesture == "POINT":
-                # Check for click by distance between index and thumb
-                if self.get_distance(
-                    (landmarks[8].x, landmarks[8].y),
-                    (landmarks[4].x, landmarks[4].y)
-                ) < CLICK_THRESHOLD:
-                    self.mouse.click(Button.left, 1)
-                    self.last_gesture_time = current_time
-            
-            elif gesture == "PEACE":
-                # Right click
-                if self.get_distance(
-                    (landmarks[12].x, landmarks[12].y),
-                    (landmarks[4].x, landmarks[4].y)
-                ) < CLICK_THRESHOLD:
-                    self.mouse.click(Button.right, 1)
-                    self.last_gesture_time = current_time
+        if current_time - self.last_gesture_time > config.GESTURE_DELAY:
+            if left_pinch:
+                self.mouse.click(Button.left, 1)
+                self.last_gesture_time = current_time
+            elif right_pinch:
+                self.mouse.click(Button.right, 1)
+                self.last_gesture_time = current_time
     
     def run(self):
         """Main control loop"""
@@ -174,8 +158,8 @@ class GestureMouseController:
         print("Hand Gesture Mouse Controller")
         print("Gestures:")
         print("  PALM - Move mouse")
-        print("  POINT + pinch index/thumb - Left click")
-        print("  PEACE + pinch middle/thumb - Right click")
+        print("  Pinch thumb + index - Left click")
+        print("  Pinch thumb + middle - Right click")
         print("  FIST - Stop")
         print("\nPress 'Q' to quit, 'C' to change camera, 'R' to reset smoothing")
         print("Starting camera feed...")
@@ -190,25 +174,18 @@ class GestureMouseController:
             frame = cv2.flip(frame, 1)
             height, width, _ = frame.shape
             
-            # Convert to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
             # Process hand detection
-            results = self.hands.process(rgb_frame)
+            hand_landmarks_list = self.hand_tracker.detect(frame)
             
             # Draw on frame
-            if results.multi_hand_landmarks:
-                for hand_landmarks in results.multi_hand_landmarks:
+            if hand_landmarks_list:
+                for hand_landmarks in hand_landmarks_list:
                     # Draw hand skeleton
-                    self.mp_drawing.draw_landmarks(
-                        frame,
-                        hand_landmarks,
-                        self.mp_hands.HAND_CONNECTIONS
-                    )
+                    self.hand_tracker.draw_landmarks(frame, hand_landmarks)
                     
                     # Get gesture and control mouse
-                    gesture = self.get_hand_gesture(hand_landmarks.landmark)
-                    self.control_mouse(hand_landmarks.landmark, width, height, gesture)
+                    gesture = self.get_hand_gesture(hand_landmarks)
+                    self.control_mouse(hand_landmarks, width, height, gesture)
                     
                     # Display gesture on frame
                     cv2.putText(
@@ -269,7 +246,7 @@ class GestureMouseController:
         
         cap.release()
         cv2.destroyAllWindows()
-        self.hands.close()
+        self.hand_tracker.close()
         print("Application closed")
 
 def main():

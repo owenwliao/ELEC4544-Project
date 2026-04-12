@@ -9,6 +9,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 from gesture_utils import GestureRecognizer, HandAnalyzer, Vector2D
+from mediapipe_compat import HandTracker
 
 def test_imports():
     """Test if all required libraries can be imported"""
@@ -72,13 +73,11 @@ def test_hand_detection(cap):
     """Test hand detection"""
     print("\nTesting hand detection...")
     print("  Position your hand in front of the camera...")
-    
-    mp_hands = mp.solutions.hands
-    hands = mp_hands.Hands(
-        static_image_mode=False,
-        max_num_hands=1,
+
+    hand_tracker = HandTracker(
+        num_hands=1,
         min_detection_confidence=0.7,
-        min_tracking_confidence=0.5
+        min_tracking_confidence=0.5,
     )
     
     detected = False
@@ -96,23 +95,17 @@ def test_hand_detection(cap):
         frame = cv2.flip(frame, 1)
         height, width, _ = frame.shape
         
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = hands.process(rgb_frame)
-        
-        if results.multi_hand_landmarks:
+        hand_landmarks_list = hand_tracker.detect(frame)
+
+        if hand_landmarks_list:
             detected = True
-            for hand_landmarks in results.multi_hand_landmarks:
+            for hand_landmarks in hand_landmarks_list:
                 # Draw hand skeleton
-                mp_drawing = mp.solutions.drawing_utils
-                mp_drawing.draw_landmarks(
-                    frame,
-                    hand_landmarks,
-                    mp_hands.HAND_CONNECTIONS
-                )
+                hand_tracker.draw_landmarks(frame, hand_landmarks)
                 
                 # Get hand bounding box
-                xs = [lm.x for lm in hand_landmarks.landmark]
-                ys = [lm.y for lm in hand_landmarks.landmark]
+                xs = [lm.x for lm in hand_landmarks]
+                ys = [lm.y for lm in hand_landmarks]
                 
                 x_min, x_max = int(min(xs) * width), int(max(xs) * width)
                 y_min, y_max = int(min(ys) * height), int(max(ys) * height)
@@ -136,7 +129,7 @@ def test_hand_detection(cap):
         frame_count += 1
     
     cv2.destroyAllWindows()
-    hands.close()
+    hand_tracker.close()
     
     if detected:
         print("  ✓ Hand detection working!")
@@ -252,7 +245,8 @@ def main():
         if test_hand_detection(cap):
             tests_passed += 1
         
-        cap.release()
+        if cap is not None:
+            cap.release()
     else:
         # Try alternate camera
         print("\nTrying alternate camera index...")
@@ -261,7 +255,8 @@ def main():
             tests_passed += 1
             if test_hand_detection(cap):
                 tests_passed += 1
-            cap.release()
+            if cap is not None:
+                cap.release()
         else:
             print("✗ No camera found. Check DroidCam setup.\n")
     

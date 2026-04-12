@@ -42,7 +42,15 @@ class HandAnalyzer:
         """Get approximate center of hand"""
         xs = [lm.x for lm in landmarks]
         ys = [lm.y for lm in landmarks]
-        return (np.mean(xs), np.mean(ys))
+        return (float(np.mean(xs)), float(np.mean(ys)))
+
+    @staticmethod
+    def get_palm_center(landmarks) -> Tuple[float, float]:
+        """Get approximate palm center using wrist and MCP joints."""
+        palm_points = [landmarks[i] for i in (0, 5, 9, 13, 17)]
+        xs = [lm.x for lm in palm_points]
+        ys = [lm.y for lm in palm_points]
+        return (float(np.mean(xs)), float(np.mean(ys)))
     
     @staticmethod
     def is_palm_facing_camera(landmarks) -> bool:
@@ -124,7 +132,7 @@ class GestureRecognizer:
     
     @staticmethod
     def detect_pinch(landmarks, finger_tip_idx: int, thumb_idx: int = 4,
-                      threshold: float = 0.05) -> bool:
+                      threshold: float = 0.08) -> bool:
         """
         Detect if a finger is pinched with thumb
         finger_tip_idx: index of finger tip (8, 12, 16, 20)
@@ -232,7 +240,7 @@ class GestureRecognizer:
         finger_spread = np.mean(distances) if distances else 0
         spread_confidence = min(1.0, finger_spread * 5)
         
-        return (size_confidence + spread_confidence) / 2
+        return float((size_confidence + spread_confidence) / 2)
 
 def test_gesture_recognition():
     """Test gesture recognition functions"""

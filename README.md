@@ -61,7 +61,6 @@ python gesture_mouse_control.py
 | **PALM** (all fingers open) | Move mouse cursor |
 | **POINT** (only index finger up) | Point mode (cursor follows fingertip) |
 | **PINCH INDEX** (thumb + index) | Left click |
-| **PEACE** (index + middle up) | Right click mode |
 | **PINCH MIDDLE** (thumb + middle) | Right click |
 | **FIST** (all fingers closed) | Stop/standby mode |
 
@@ -93,7 +92,7 @@ Edit `config.py` to customize:
 ### Adjust Sensitivity
 
 To make clicks easier:
-- Decrease `CLICK_THRESHOLD` in config.py (smaller = easier to trigger)
+- Increase `CLICK_THRESHOLD` in config.py (larger = easier to trigger)
 - Increase `MIN_DETECTION_CONFIDENCE` for more stable detection
 
 To improve tracking:
@@ -121,8 +120,13 @@ self.camera_index = 0  # 0 = built-in, 1+ = external/DroidCam
 
 ### Clicks not working
 - Make the pinch stronger (bring thumb and finger closer)
-- Decrease `CLICK_THRESHOLD` value
+- Increase `CLICK_THRESHOLD` value
 - Ensure detection confidence is high (watch gesture feedback)
+
+### How clicking works
+- Basic mode: pinch thumb + index for a left click, or pinch thumb + middle for a right click.
+- Advanced mode: use `POINT` + pinch for left click, or `PEACE` + pinch for right click.
+- If clicks are hard to trigger, raise `CLICK_THRESHOLD` in `config.py` a bit more.
 
 ### DroidCam not connecting
 - Verify DroidCam client is running on PC

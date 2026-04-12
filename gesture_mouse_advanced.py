@@ -4,7 +4,6 @@ Includes: drag and drop, scrolling, keyboard shortcuts, gesture recording
 """
 
 import cv2
-import mediapipe as mp
 import numpy as np
 from pynput.mouse import Controller, Button
 from pynput.keyboard import Key, Listener
@@ -12,18 +11,16 @@ import threading
 import time
 from gesture_utils import GestureRecognizer, HandAnalyzer
 from config import *
+from mediapipe_compat import HandTracker
 
 class AdvancedGestureMouseController:
     def __init__(self, config_module=None):
-        # Initialize MediaPipe
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=1,
+        # Initialize MediaPipe hand tracking via Tasks API
+        self.hand_tracker = HandTracker(
+            num_hands=1,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE
         )
-        self.mp_drawing = mp.solutions.drawing_utils
         
         # Initialize mouse controller
         self.mouse = Controller()
@@ -101,19 +98,17 @@ class AdvancedGestureMouseController:
         if confidence < 0.5:
             return
         
-        # Get hand center for cursor position
-        hand_center = HandAnalyzer.get_hand_center(landmarks)
-        
-        # Normalize to screen space
-        x = int(hand_center[0] * image_width)
-        y = int(hand_center[1] * image_height)
-        
-        # Invert X for natural movement
-        x = image_width - x
-        
-        # Map to screen resolution
-        screen_x = int((x / image_width) * SCREEN_WIDTH)
-        screen_y = int((y / image_height) * SCREEN_HEIGHT)
+        # Track the palm, not the fingertips
+        palm_x, palm_y = HandAnalyzer.get_palm_center(landmarks)
+
+        # Scale palm position to give more usable screen range without leaving the camera frame
+        scaled_x = 0.5 + ((palm_x - 0.5) * PALM_CONTROL_GAIN)
+        scaled_y = 0.5 + ((palm_y - 0.5) * PALM_CONTROL_GAIN)
+        scaled_x = max(0.0, min(1.0, scaled_x))
+        scaled_y = max(0.0, min(1.0, scaled_y))
+
+        screen_x = int(scaled_x * SCREEN_WIDTH)
+        screen_y = int(scaled_y * SCREEN_HEIGHT)
         
         # Smooth movement
         smooth_x = int(self.prev_x * SMOOTHING_FACTOR + screen_x * (1 - SMOOTHING_FACTOR))
@@ -122,22 +117,22 @@ class AdvancedGestureMouseController:
         self.prev_x = smooth_x
         self.prev_y = smooth_y
         
-        # Move mouse
-        if gesture == 'PALM' and not self.dragging:
+        # Move mouse with the palm position regardless of finger gesture
+        if not self.dragging:
             self.mouse.position = (smooth_x, smooth_y)
         
         # Action gestures
         if current_time - self.last_gesture_time > GESTURE_DELAY:
             if gesture == 'POINT':
                 # Left click on pinch
-                if GestureRecognizer.detect_pinch(landmarks, 8):
+                if GestureRecognizer.detect_pinch(landmarks, 8, threshold=PINCH_SENSITIVITY):
                     if ENABLE_LEFT_CLICK:
                         self.mouse.click(Button.left, 1)
                     self.last_gesture_time = current_time
             
             elif gesture == 'PEACE':
                 # Right click on pinch
-                if GestureRecognizer.detect_pinch(landmarks, 12):
+                if GestureRecognizer.detect_pinch(landmarks, 12, threshold=PINCH_SENSITIVITY):
                     if ENABLE_RIGHT_CLICK:
                         self.mouse.click(Button.right, 1)
                     self.last_gesture_time = current_time
@@ -190,11 +185,8 @@ class AdvancedGestureMouseController:
             # Update FPS
             self.update_fps()
             
-            # Convert to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
             # Process hand detection
-            results = self.hands.process(rgb_frame)
+            hand_landmarks_list = self.hand_tracker.detect(frame)
             
             # Draw info on frame
             if not self.paused:
@@ -209,21 +201,17 @@ class AdvancedGestureMouseController:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
             
             # Process gestures
-            if results.multi_hand_landmarks and not self.paused:
-                for hand_landmarks in results.multi_hand_landmarks:
+            if hand_landmarks_list and not self.paused:
+                for hand_landmarks in hand_landmarks_list:
                     # Draw hand skeleton
                     if SHOW_HAND_SKELETON:
-                        self.mp_drawing.draw_landmarks(
-                            frame,
-                            hand_landmarks,
-                            self.mp_hands.HAND_CONNECTIONS
-                        )
+                        self.hand_tracker.draw_landmarks(frame, hand_landmarks)
                     
                     # Detect gesture
-                    gesture_info = self.detect_advanced_gesture(hand_landmarks.landmark)
+                    gesture_info = self.detect_advanced_gesture(hand_landmarks)
                     
                     # Control mouse
-                    self.control_mouse_advanced(hand_landmarks.landmark, width, height, gesture_info)
+                    self.control_mouse_advanced(hand_landmarks, width, height, gesture_info)
                     
                     # Display gesture info
                     if SHOW_GESTURE_NAME:
@@ -274,7 +262,7 @@ class AdvancedGestureMouseController:
         
         cap.release()
         cv2.destroyAllWindows()
-        self.hands.close()
+        self.hand_tracker.close()
         print("Application closed")
 
 def main():

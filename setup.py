@@ -33,8 +33,16 @@ def check_mediapipe():
     """Check if MediaPipe is installed"""
     print("\nChecking MediaPipe...")
     try:
-        import mediapipe
+        import mediapipe as mp
+        has_tasks = hasattr(mp, "tasks") and hasattr(mp.tasks, "vision")
+        has_hand_landmarker = has_tasks and hasattr(mp.tasks.vision, "HandLandmarker")
+
+        if not has_hand_landmarker:
+            print("❌ MediaPipe Tasks HandLandmarker API not available")
+            return False
+
         print(f"✓ MediaPipe installed")
+        print("✓ HandLandmarker Tasks API available")
         return True
     except ImportError:
         print("❌ MediaPipe not installed")

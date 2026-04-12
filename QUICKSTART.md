@@ -65,6 +65,12 @@ python gesture_mouse_advanced.py
 | **THUMBS UP** | Thumb pointing up, fingers closed | Double click |
 | **FIST** | All fingers closed | Stop/Pause |
 
+## How Clicking Works
+
+- **Left click**: pinch thumb + index finger together.
+- **Right click**: pinch thumb + middle finger together.
+- If clicks are too hard to trigger, increase `CLICK_THRESHOLD` in `config.py`.
+
 ## Keyboard Shortcuts
 
 - **Q** - Quit application
@@ -88,7 +94,7 @@ python gesture_mouse_advanced.py
 
 ### "Clicks not working"
 - ✓ Make pinch gesture more pronounced
-- ✓ Decrease `CLICK_THRESHOLD` in `config.py` (try 0.03)
+- ✓ Increase `CLICK_THRESHOLD` in `config.py` (try 0.08 or 0.1)
 - ✓ Hold pinch longer (1-2 seconds)
 
 ### "Cursor movement is jerky"
