@@ -4,6 +4,7 @@ Includes: drag and drop, scrolling, keyboard shortcuts, gesture recording
 """
 
 import cv2
+import math
 import numpy as np
 from pynput.mouse import Controller, Button
 from pynput.keyboard import Key, Listener
@@ -12,6 +13,7 @@ import time
 from gesture_utils import GestureRecognizer, HandAnalyzer
 from config import *
 from mediapipe_compat import HandTracker
+from pynput.keyboard import Key, Controller as KeyboardController
 
 class AdvancedGestureMouseController:
     def __init__(self, config_module=None):
@@ -21,7 +23,13 @@ class AdvancedGestureMouseController:
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE
         )
-        
+        # buffer for gesture stability
+        self.gesture_buffer = []
+        self.buffer_size = 5 # Number of frames to stay consistent
+        self.stable_gesture = "UNKNOWN"
+
+        self.current_angle = 0 # For rotation-based volume control
+
         # Initialize mouse controller
         self.mouse = Controller()
         
@@ -44,7 +52,12 @@ class AdvancedGestureMouseController:
         self.fps = 0
         self.frame_count = 0
         self.prev_time = time.time()
-        
+
+        self.keyboard = KeyboardController()
+        self.prev_vol_y = 0 # To track movement direction
+        self.prev_scroll_y = 0
+        self.last_logged_mode = "IDLE"
+
     def update_fps(self):
         """Update FPS counter"""
         self.frame_count += 1
@@ -55,38 +68,52 @@ class AdvancedGestureMouseController:
             self.prev_time = current_time
     
     def detect_advanced_gesture(self, landmarks):
-        """Detect advanced gestures with confidence"""
-        gesture_info = {
-            'name': 'UNKNOWN',
-            'confidence': 0.0,
-            'gesture_type': 'movement'
-        }
-        
-        # Use utility functions for detection
+        gesture_info = {'name': 'UNKNOWN', 'confidence': 0.0}
         extended = GestureRecognizer.get_extended_fingers(landmarks)
         
-        # Detect specific gestures
-        if GestureRecognizer.detect_open_hand(landmarks):
-            gesture_info['name'] = 'PALM'
-            gesture_info['gesture_type'] = 'movement'
-        elif GestureRecognizer.detect_fist(landmarks):
-            gesture_info['name'] = 'FIST'
-            gesture_info['gesture_type'] = 'stop'
-        elif extended == [False, True, False, False, False]:  # Only index
-            gesture_info['name'] = 'POINT'
-            gesture_info['gesture_type'] = 'action'
-        elif GestureRecognizer.detect_thumbs_up(landmarks):
-            gesture_info['name'] = 'THUMBS_UP'
-            gesture_info['gesture_type'] = 'action'
-        elif GestureRecognizer.detect_ok_sign(landmarks):
+        # 1. SPECIAL CASE: OK SIGN (Uses distance logic)
+        if GestureRecognizer.detect_ok_sign(landmarks):
             gesture_info['name'] = 'OK'
-            gesture_info['gesture_type'] = 'action'
-        elif extended == [False, True, True, False, False]:  # Index + middle
+            
+        # 2. THUMBS_UP vs PINKY_UP (The Conflict Zone)
+        # Check: Is ONLY the thumb up and physically higher than the index base?
+        elif extended == [True, False, False, False, False]:
+            if landmarks[4].y < landmarks[5].y: # Thumb tip higher than Index base
+                gesture_info['name'] = 'THUMBS_UP'
+        
+        # Check: Is ONLY the pinky up and physically higher than its own joint?
+        elif extended == [False, False, False, False, True]:
+            if landmarks[20].y < landmarks[18].y:
+                gesture_info['name'] = 'PINKY_UP'
+
+        # 3. ARRAY MATCHING (Numbers and Nav)
+        elif extended == [True, True, True, True, True]:
+            gesture_info['name'] = 'PALM'
+        elif extended == [False, True, False, False, False]:
+            gesture_info['name'] = 'POINT'
+        elif extended == [False, True, True, False, False]:
             gesture_info['name'] = 'PEACE'
-            gesture_info['gesture_type'] = 'action'
-        
+        elif extended == [False, True, True, True, False]:
+            gesture_info['name'] = 'THREE'
+        elif extended == [False, False, False, False, False]:
+            gesture_info['name'] = 'FIST'
+        elif extended == [False, True, False, False, True]:
+            gesture_info['name'] = 'LOVE'
+            
         gesture_info['confidence'] = GestureRecognizer.get_gesture_confidence(landmarks)
-        
+
+        current_raw_gesture = gesture_info['name']
+    
+        # Add to buffer
+        self.gesture_buffer.append(current_raw_gesture)
+        if len(self.gesture_buffer) > self.buffer_size:
+            self.gesture_buffer.pop(0)
+            
+        # Only update stable_gesture if the buffer is unanimous
+        if len(set(self.gesture_buffer)) == 1:
+            self.stable_gesture = self.gesture_buffer[0]
+            
+        gesture_info['name'] = self.stable_gesture
         return gesture_info
     
     def control_mouse_advanced(self, landmarks, image_width, image_height, gesture_info):
@@ -100,6 +127,75 @@ class AdvancedGestureMouseController:
         
         # Track the palm, not the fingertips
         palm_x, palm_y = HandAnalyzer.get_palm_center(landmarks)
+
+        # Volume control with pinky up
+        if gesture == 'PINKY_UP':
+            if abs(palm_y - self.prev_vol_y) > 0.05:
+                if palm_y < self.prev_vol_y:
+                    self.keyboard.press(Key.media_volume_up)
+                    self.keyboard.release(Key.media_volume_up)
+                else:
+                    self.keyboard.press(Key.media_volume_down)
+                    self.keyboard.release(Key.media_volume_down)
+                self.prev_vol_y = palm_y
+            return # Block mouse movement while adjusting volume
+        
+        # Volume control with rotation (Love sign)
+        
+        if gesture == 'LOVE':
+            # 1. Get coordinates for the Index and Pinky knuckles
+            p5 = landmarks[5]
+            p17 = landmarks[17]
+            
+            # 2. Calculate the angle of the hand in degrees
+            # We use atan2(dy, dx) to get the rotation relative to the horizontal axis
+            self.current_angle = math.degrees(math.atan2(p17.y - p5.y, p17.x - p5.x))
+            
+            # 3. Initialize prev_angle if it doesn't exist
+            if not hasattr(self, 'prev_angle'):
+                self.prev_angle = self.current_angle
+                return
+
+            # 4. Calculate the rotation difference (Delta)
+            angle_delta = self.current_angle - self.prev_angle
+            
+            # Sensitivity: Only trigger if rotated more than 5 degrees
+            if abs(angle_delta) > 5:
+                if angle_delta > 0:
+                    # Rotated Right (Clockwise)
+                    self.keyboard.press(Key.media_volume_up)
+                    self.keyboard.release(Key.media_volume_up)
+                    print("Rotate Right: Volume Up")
+                else:
+                    # Rotated Left (Counter-Clockwise)
+                    self.keyboard.press(Key.media_volume_down)
+                    self.keyboard.release(Key.media_volume_down)
+                    print("Rotate Left: Volume Down")
+                    
+                # Update reference for next frame
+                self.prev_angle = self.current_angle
+            
+            return # Lock cursor movement
+
+        # Scrolling with three fingers up
+        if gesture == 'THREE':
+            # Use a default if prev_scroll_y isn't set yet
+            if not hasattr(self, 'prev_scroll_y'):
+                self.prev_scroll_y = palm_y
+                
+            y_delta = self.prev_scroll_y - palm_y 
+            
+            # Only calculate and use scroll_amount if movement is significant
+            if abs(y_delta) > 0.01:
+                scroll_amount = int(y_delta * 150) # Increased multiplier for smoother feel
+                self.mouse.scroll(0, scroll_amount)
+                
+                # FIX: Print must be INSIDE this block to avoid UnboundLocalError
+                print(f"DEBUG: Scrolling {'Up' if scroll_amount > 0 else 'Down'}")
+            
+            # Always update the previous position to track movement
+            self.prev_scroll_y = palm_y
+            return # Block mouse movement while scrolling
 
         # Scale palm position to give more usable screen range without leaving the camera frame
         scaled_x = 0.5 + ((palm_x - 0.5) * PALM_CONTROL_GAIN)
@@ -124,30 +220,27 @@ class AdvancedGestureMouseController:
         # Action gestures
         if current_time - self.last_gesture_time > GESTURE_DELAY:
             if gesture == 'POINT':
-                # Left click on pinch
+                # Precision Left Click
                 if GestureRecognizer.detect_pinch(landmarks, 8, threshold=PINCH_SENSITIVITY):
-                    if ENABLE_LEFT_CLICK:
-                        self.mouse.click(Button.left, 1)
+                    self.mouse.click(Button.left, 1)
                     self.last_gesture_time = current_time
             
             elif gesture == 'PEACE':
-                # Right click on pinch
+                # Precision Right Click
                 if GestureRecognizer.detect_pinch(landmarks, 12, threshold=PINCH_SENSITIVITY):
-                    if ENABLE_RIGHT_CLICK:
-                        self.mouse.click(Button.right, 1)
+                    self.mouse.click(Button.right, 1)
                     self.last_gesture_time = current_time
             
             elif gesture == 'THUMBS_UP':
-                # Double click action
-                if ENABLE_LEFT_CLICK:
-                    self.mouse.click(Button.left, 2)
+                # Power Action: Double Click
+                self.mouse.click(Button.left, 2)
                 self.last_gesture_time = current_time
             
             elif gesture == 'OK':
-                # Middle click
-                if ENABLE_LEFT_CLICK:
-                    self.mouse.click(Button.middle, 1)
+                # Utility: Middle Click
+                self.mouse.click(Button.middle, 1)
                 self.last_gesture_time = current_time
+
     
     def run_advanced(self):
         """Main control loop with advanced features"""

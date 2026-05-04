@@ -1,10 +1,12 @@
 """
 Configuration settings for Hand Gesture Mouse Controller
 """
+import pyautogui
 
 # Screen settings
-SCREEN_WIDTH = 1920
-SCREEN_HEIGHT = 1080
+_screen_size = pyautogui.size()
+SCREEN_WIDTH = _screen_size.width
+SCREEN_HEIGHT = _screen_size.height
 
 # Hand detection settings
 MIN_DETECTION_CONFIDENCE = 0.7

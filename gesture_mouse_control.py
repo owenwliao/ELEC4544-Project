@@ -5,6 +5,7 @@ from pynput.keyboard import Key, Listener
 import threading
 import time
 import config
+import tkinter as tk
 from mediapipe_compat import HandTracker
 from gesture_utils import HandAnalyzer
 
@@ -29,6 +30,15 @@ class GestureMouseController:
         
         # Camera selection
         self.camera_index = 0
+
+        # Dynamically get the actual screen resolution
+        root = tk.Tk()
+        self.screen_width = root.winfo_screenwidth()
+        self.screen_height = root.winfo_screenheight()
+        root.destroy()
+
+        # Increase gain to ensure full coverage (can also move this to config.py)
+        self.control_gain = 2.5
         
     def get_distance(self, point1, point2):
         """Calculate Euclidean distance between two points"""
@@ -119,13 +129,13 @@ class GestureMouseController:
         palm_x, palm_y = HandAnalyzer.get_palm_center(landmarks)
 
         # Scale palm position to provide more screen coverage without needing to leave the frame
-        scaled_x = 0.5 + ((palm_x - 0.5) * config.PALM_CONTROL_GAIN)
-        scaled_y = 0.5 + ((palm_y - 0.5) * config.PALM_CONTROL_GAIN)
+        scaled_x = 0.5 + ((palm_x - 0.5) * self.control_gain)
+        scaled_y = 0.5 + ((palm_y - 0.5) * self.control_gain)
         scaled_x = max(0.0, min(1.0, scaled_x))
         scaled_y = max(0.0, min(1.0, scaled_y))
 
-        screen_x = int(scaled_x * config.SCREEN_WIDTH)
-        screen_y = int(scaled_y * config.SCREEN_HEIGHT)
+        screen_x = int(scaled_x * self.screen_width)
+        screen_y = int(scaled_y * self.screen_height)
         
         # Smooth movement
         smooth_x = int(self.prev_x * config.SMOOTHING_FACTOR + screen_x * (1 - config.SMOOTHING_FACTOR))
@@ -235,8 +245,8 @@ class GestureMouseController:
                     cap.release()
                     self.camera_index = camera_idx
                     cap = cv2.VideoCapture(self.camera_index)
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
                     print(f"Switched to camera {camera_idx}")
                 except ValueError:
                     print("Invalid input")
